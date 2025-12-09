@@ -1,0 +1,421 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Christmas Magic Tree</title>
+    <style>
+        body {
+            margin: 0;
+            overflow: hidden;
+            background-color: #000000; /* 纯黑背景 */
+            font-family: 'Arial', sans-serif;
+        }
+        #canvas-container {
+            width: 100vw;
+            height: 100vh;
+            position: absolute;
+            top: 0;
+            left: 0;
+            z-index: 1;
+        }
+        
+        /* 
+           【关键修复】 
+           不能使用 display: none 或将位置移出屏幕 (-9999px)，
+           否则浏览器会暂停视频渲染，导致 MediaPipe 接收不到画面。
+           解决方法：放在屏幕内，但设为透明且层级最低。
+        */
+        #video-input {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 640px;
+            height: 480px;
+            opacity: 0;      /* 透明不可见 */
+            z-index: -10;    /* 放在最底层 */
+            pointer-events: none;
+        }
+
+        /* 状态提示 */
+        #status-pill {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            padding: 8px 16px;
+            background: rgba(20, 20, 20, 0.8);
+            border: 1px solid rgba(255, 215, 0, 0.3);
+            border-radius: 20px;
+            color: #FFD700;
+            font-size: 13px;
+            z-index: 10;
+            backdrop-filter: blur(4px);
+            transition: all 0.3s;
+        }
+
+        /* 圣诞文字 */
+        #christmas-text {
+            position: absolute;
+            top: 15%;
+            left: 50%;
+            transform: translate(-50%, -50%) scale(0.5);
+            font-size: 4rem;
+            font-weight: 900;
+            color: #FFD700;
+            text-shadow: 0 0 20px #FFD700, 0 0 40px #ff4500;
+            z-index: 5;
+            opacity: 0;
+            transition: all 0.4s ease-out;
+            pointer-events: none;
+            white-space: nowrap;
+            font-family: serif;
+        }
+
+        /* 调试点：右下角，检测到手时变亮 */
+        #debug-dot {
+            position: absolute;
+            bottom: 20px;
+            right: 20px;
+            width: 12px;
+            height: 12px;
+            background-color: #FFD700;
+            border-radius: 50%;
+            box-shadow: 0 0 15px #FFD700;
+            z-index: 10;
+            opacity: 0.1;
+            transition: opacity 0.2s, transform 0.1s;
+        }
+    </style>
+    <!-- 引入库 -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/control_utils/control_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+</head>
+<body>
+
+    <div id="status-pill">系统初始化... (请允许摄像头权限)</div>
+    <div id="debug-dot"></div>
+    <h1 id="christmas-text">MERRY CHRISTMAS</h1>
+    
+    <!-- 视频源 -->
+    <video id="video-input" playsinline></video>
+    <!-- 3D 画布 -->
+    <div id="canvas-container"></div>
+
+<script>
+    // ================= 配置参数 =================
+    const CONFIG = {
+        particleCount: 8000,      // 粒子数量
+        particleColor: 0xFFD700,  // 暖金色
+        bgColor: 0x000000,        // 纯黑背景
+        treeLevels: 10,
+        boxSize: 0.65
+    };
+
+    // ================= 全局变量 =================
+    let scene, camera, renderer;
+    let giftTreeGroup, starMesh, starGlow;
+    let particleSystem;
+    
+    let openness = 0;
+    let currentOpenness = 0;
+    let isHandDetected = false;
+
+    // 入口
+    window.onload = function() {
+        initThreeJS();
+        startCameraApp(); // 启动摄像头逻辑
+        animate();
+    };
+
+    // ================= 1. Three.js 场景构建 =================
+    function initThreeJS() {
+        scene = new THREE.Scene();
+        scene.background = new THREE.Color(CONFIG.bgColor); // 强制纯黑
+        scene.fog = new THREE.FogExp2(CONFIG.bgColor, 0.02); // 黑色雾气
+
+        camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 1000);
+        camera.position.set(0, 5, 25);
+        camera.lookAt(0, 2, 0);
+
+        // 关闭 alpha 通道，强制不透明，解决背景变白问题
+        renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+        document.getElementById('canvas-container').appendChild(renderer.domElement);
+
+        // 灯光
+        const ambient = new THREE.AmbientLight(0xffffff, 0.4);
+        scene.add(ambient);
+        const dirLight = new THREE.DirectionalLight(0xffd700, 1.2);
+        dirLight.position.set(10, 20, 10);
+        dirLight.castShadow = true;
+        scene.add(dirLight);
+
+        createGiftTree();
+        createParticles();
+
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+    }
+
+    // --- 礼物树构建 ---
+    function createRibbonTexture(colorHex) {
+        const canvas = document.createElement('canvas');
+        canvas.width = 64; canvas.height = 64;
+        const ctx = canvas.getContext('2d');
+        ctx.fillStyle = '#' + new THREE.Color(colorHex).getHexString();
+        ctx.fillRect(0,0,64,64);
+        ctx.fillStyle = '#FFD700'; // 金色十字丝带
+        ctx.fillRect(28,0,8,64);
+        ctx.fillRect(0,28,64,8);
+        return new THREE.MeshStandardMaterial({ map: new THREE.CanvasTexture(canvas), roughness: 0.4 });
+    }
+
+    function createGiftTree() {
+        giftTreeGroup = new THREE.Group();
+        const colors = [0xB22222, 0x006400, 0xFFFFFF, 0xDAA520]; // 红、绿、白、金
+        const materials = colors.map(c => createRibbonTexture(c));
+        const geom = new THREE.BoxGeometry(1, 1, 1);
+
+        let y = 0;
+        for(let i=0; i<CONFIG.treeLevels; i++) {
+            const p = i/CONFIG.treeLevels;
+            const r = 4.5 * (1-p) + 0.1;
+            const s = CONFIG.boxSize * (1 - p*0.3);
+            const count = Math.max(1, Math.floor( (2*Math.PI*r) / (s*1.2) ));
+            
+            if(i === CONFIG.treeLevels-1) { 
+                // 树顶
+                const box = new THREE.Mesh(geom, materials[3]); 
+                box.position.set(0, y, 0);
+                box.scale.setScalar(s);
+                box.castShadow = true;
+                giftTreeGroup.add(box);
+            } else {
+                for(let j=0; j<count; j++) {
+                    const ang = (j/count)*Math.PI*2 + i*0.5;
+                    const box = new THREE.Mesh(geom, materials[Math.floor(Math.random()*materials.length)]);
+                    // 随机扰动位置
+                    box.position.set(Math.cos(ang)*r + (Math.random()-0.5)*0.1, y, Math.sin(ang)*r + (Math.random()-0.5)*0.1);
+                    box.rotation.set(Math.random()*0.2, ang + Math.random(), Math.random()*0.2);
+                    box.scale.setScalar(s);
+                    box.castShadow = true;
+                    box.receiveShadow = true;
+                    giftTreeGroup.add(box);
+                }
+            }
+            y += s * 0.95;
+        }
+
+        // 星星
+        const starGeo = new THREE.OctahedronGeometry(0.8, 0);
+        const starMat = new THREE.MeshBasicMaterial({ color: 0xFFFF00 });
+        starMesh = new THREE.Mesh(starGeo, starMat);
+        starMesh.position.y = y + 0.5;
+        giftTreeGroup.add(starMesh);
+
+        // 星星光晕
+        const canvas = document.createElement('canvas');
+        canvas.width = 64; canvas.height = 64;
+        const ctx = canvas.getContext('2d');
+        const grad = ctx.createRadialGradient(32,32,0,32,32,32);
+        grad.addColorStop(0, 'rgba(255,215,0,1)');
+        grad.addColorStop(1, 'rgba(0,0,0,0)');
+        ctx.fillStyle = grad; ctx.fillRect(0,0,64,64);
+        
+        starGlow = new THREE.Sprite(new THREE.SpriteMaterial({ 
+            map: new THREE.CanvasTexture(canvas), 
+            color: 0xffaa00, blending: THREE.AdditiveBlending 
+        }));
+        starGlow.scale.set(6,6,1);
+        starMesh.add(starGlow);
+
+        giftTreeGroup.position.y = -y/2;
+        scene.add(giftTreeGroup);
+    }
+
+    // --- 暖色粒子系统 ---
+    function createParticles() {
+        const geom = new THREE.BufferGeometry();
+        const pos = [];
+        const sizes = [];
+        const vels = [];
+
+        for(let i=0; i<CONFIG.particleCount; i++) {
+            pos.push((Math.random()-0.5)*120);
+            pos.push((Math.random()-0.5)*80);
+            pos.push((Math.random()-0.5)*80);
+            sizes.push(Math.random()*0.6 + 0.1);
+            vels.push(Math.random());
+        }
+
+        geom.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+        geom.setAttribute('size', new THREE.Float32BufferAttribute(sizes, 1));
+        geom.setAttribute('velocity', new THREE.Float32BufferAttribute(vels, 1));
+
+        const canvas = document.createElement('canvas');
+        canvas.width=32; canvas.height=32;
+        const ctx=canvas.getContext('2d');
+        const g=ctx.createRadialGradient(16,16,0,16,16,16);
+        g.addColorStop(0,'rgba(255,255,255,1)');
+        g.addColorStop(1,'rgba(0,0,0,0)');
+        ctx.fillStyle=g; ctx.fillRect(0,0,32,32);
+
+        const mat = new THREE.PointsMaterial({
+            color: CONFIG.particleColor,
+            size: 0.5,
+            map: new THREE.CanvasTexture(canvas),
+            transparent: true, opacity: 0.9,
+            blending: THREE.AdditiveBlending,
+            depthWrite: false,
+            sizeAttenuation: true
+        });
+
+        particleSystem = new THREE.Points(geom, mat);
+        scene.add(particleSystem);
+    }
+
+    // ================= 2. 手势识别 (修复版) =================
+    function startCameraApp() {
+        const videoElement = document.getElementById('video-input');
+        const statusPill = document.getElementById('status-pill');
+        const debugDot = document.getElementById('debug-dot');
+
+        const hands = new Hands({locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`});
+        
+        hands.setOptions({
+            maxNumHands: 1,
+            modelComplexity: 1,
+            minDetectionConfidence: 0.5,
+            minTrackingConfidence: 0.5
+        });
+
+        hands.onResults((results) => {
+            if(results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
+                // 检测到手
+                if(!isHandDetected) {
+                    statusPill.innerText = "系统正常：手势已连接";
+                    statusPill.style.borderColor = "#00FF00";
+                    statusPill.style.color = "#00FF00";
+                    debugDot.style.opacity = 1; // 亮起小黄点
+                    isHandDetected = true;
+                }
+                
+                const lm = results.multiHandLandmarks[0];
+                // 计算食指(8)与拇指(4)距离
+                const dist = Math.hypot(lm[4].x - lm[8].x, lm[4].y - lm[8].y);
+                
+                // 视觉反馈：小黄点随张开程度变大
+                debugDot.style.transform = `scale(${1 + dist * 8})`;
+
+                // 映射距离到 0-1 之间
+                const val = (dist - 0.03) * 6.0;
+                openness = Math.max(0, Math.min(1, val));
+            } else {
+                // 未检测到手
+                if(isHandDetected) {
+                    statusPill.innerText = "待机：请在镜头前张开手";
+                    statusPill.style.borderColor = "rgba(255, 215, 0, 0.3)";
+                    statusPill.style.color = "#FFD700";
+                    debugDot.style.opacity = 0.1;
+                    isHandDetected = false;
+                }
+                openness = 0; // 归零
+            }
+        });
+
+        const camera = new Camera(videoElement, {
+            onFrame: async () => {
+                await hands.send({image: videoElement});
+            },
+            width: 640,
+            height: 480
+        });
+
+        camera.start()
+            .then(() => {
+                statusPill.innerText = "摄像已启动，请展示手势";
+            })
+            .catch(err => {
+                console.error(err);
+                statusPill.innerText = "错误: 无法访问摄像头";
+                statusPill.style.color = "red";
+            });
+    }
+
+    // ================= 3. 动画循环 =================
+    function animate() {
+        requestAnimationFrame(animate);
+        const time = Date.now() * 0.001;
+
+        // 平滑过渡
+        currentOpenness += (openness - currentOpenness) * 0.1;
+
+        // 树
+        if(giftTreeGroup) {
+            giftTreeGroup.rotation.y = time * 0.2;
+            // 张开手：加速旋转 + 放大
+            if(currentOpenness > 0.1) {
+                giftTreeGroup.rotation.y += currentOpenness * 0.3; 
+                const s = 1 + currentOpenness * 0.15;
+                giftTreeGroup.scale.set(s, s, s);
+            } else {
+                giftTreeGroup.scale.lerp(new THREE.Vector3(1,1,1), 0.1);
+            }
+        }
+
+        // 星星
+        if(starMesh) {
+            starMesh.rotation.y -= 0.05;
+            // 随张开闪烁
+            const gs = 6 + Math.sin(time*3) + currentOpenness * 5;
+            starGlow.scale.set(gs, gs, 1);
+        }
+
+        // 粒子
+        if(particleSystem) {
+            const pos = particleSystem.geometry.attributes.position.array;
+            const vels = particleSystem.geometry.attributes.velocity.array;
+
+            for(let i=0; i<pos.length; i+=3) {
+                const idx = i/3;
+                // 默认下落
+                let vy = -vels[idx] * 0.03; 
+                
+                // 手势互动：向上飞升
+                if(currentOpenness > 0.1) {
+                    vy = vels[idx] * 0.5 * currentOpenness;
+                }
+
+                pos[i+1] += vy;
+                
+                // 循环边界
+                if(pos[i+1] < -40) pos[i+1] = 40;
+                if(pos[i+1] > 40) pos[i+1] = -40;
+                
+                // 左右飘动
+                pos[i] += Math.sin(time + idx) * 0.015;
+            }
+            particleSystem.geometry.attributes.position.needsUpdate = true;
+        }
+
+        // 文字
+        const text = document.getElementById('christmas-text');
+        if(currentOpenness > 0.6) {
+            text.style.opacity = 1;
+            text.style.transform = `translate(-50%, -50%) scale(${1 + currentOpenness * 0.2})`;
+        } else {
+            text.style.opacity = 0;
+            text.style.transform = `translate(-50%, -50%) scale(0.5)`;
+        }
+
+        renderer.render(scene, camera);
+    }
+</script>
+</body>
+</html>
