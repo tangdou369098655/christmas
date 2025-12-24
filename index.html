@@ -92,11 +92,11 @@
     
     <!-- 引入必要的库文件 -->
     <!-- Three.js - 3D渲染库 -->
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="./cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
     <!-- MediaPipe库 - 手势识别功能 -->
-    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
-    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/control_utils/control_utils.js" crossorigin="anonymous"></script>
-    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+    <script src="./cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+    <script src="./cdn.jsdelivr.net/npm/@mediapipe/control_utils/control_utils.js" crossorigin="anonymous"></script>
+    <script src="./cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
 </head>
 <body>
     <!-- 状态提示元素 -->
@@ -393,7 +393,7 @@
         const debugDot = document.getElementById('debug-dot');
 
         // 创建MediaPipe手势识别实例
-        const hands = new Hands({locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`});
+        const hands = new Hands({locateFile: (file) => `./cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`});
         
         // 配置手势识别参数
         hands.setOptions({
@@ -698,7 +698,7 @@
             uniforms: {
                 ...treeUniforms,
                 pointTexture: {
-                    value: new THREE.TextureLoader().load('https://assets.codepen.io/3685267/spark1.png')
+                    value: new THREE.TextureLoader().load('./assets.codepen.io/3685267/spark1.png')
                 }
             },
             vertexShader,
